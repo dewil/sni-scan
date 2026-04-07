@@ -22,6 +22,26 @@
 python3 sni-scan.py -o report.md
 ```
 
+## Запуск на хостинге (VPS)
+
+```bash
+# 1) Подключиться к серверу
+ssh user@your-server-ip
+
+# 2) Установить git и python (Ubuntu/Debian)
+sudo apt update
+sudo apt install -y git python3
+
+# 3) Скачать репозиторий
+git clone https://github.com/dewil/sni-scan.git
+cd sni-scan
+
+# 4) Запустить скан
+python3 sni-scan.py -o report.md
+```
+
+Отчет будет сохранен в файле `report.md` в директории проекта.
+
 ## Примеры
 
 ```bash
@@ -30,6 +50,9 @@ python3 sni-scan.py -o report.md
 
 # Скан другой маски (/26)
 python3 sni-scan.py -m 26 -o report_26.md
+
+# Скан через конкретный интерфейс (например, en0)
+python3 sni-scan.py -i en0 -o report_en0.md
 ```
 
 ## Параметры
@@ -38,6 +61,7 @@ python3 sni-scan.py -m 26 -o report_26.md
 - `-t, --timeout` — таймаут на хост (сек)
 - `-w, --workers` — число параллельных потоков
 - `-m, --mask` — маска подсети (`0..32`, по умолчанию `24`)
+- `-i, --interface` — имя локального интерфейса (например `en0`)
 
 ## Выходной отчет
 
@@ -48,6 +72,7 @@ python3 sni-scan.py -m 26 -o report_26.md
 - `CN` и `SAN` (кандидаты SNI);
 - колонка `DNS -> IP match` (`yes/no/partial/-`);
 - служебные заметки по каждому хосту.
+- список всех локальных интерфейсов и их IPv4-адресов (с пометкой выбранного).
 
 ## Важно
 

@@ -2,8 +2,10 @@
 import argparse
 import ipaddress
 import os
+import platform
 import socket
 import ssl
+import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -22,6 +24,12 @@ class ScanResult:
     note: str
 
 
+@dataclass
+class LocalInterface:
+    name: str
+    ipv4_addresses: List[str]
+
+
 def detect_local_ipv4() -> str:
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -30,6 +38,67 @@ def detect_local_ipv4() -> str:
     finally:
         probe.close()
     return local_ip
+
+
+def list_interface_ipv4_addresses(iface_name: str) -> List[str]:
+    system = platform.system().lower()
+    addresses: List[str] = []
+
+    try:
+        if system == "darwin":
+            output = subprocess.check_output(
+                ["ipconfig", "getifaddr", iface_name],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+            if output:
+                ipaddress.IPv4Address(output)
+                addresses.append(output)
+        elif system == "linux":
+            output = subprocess.check_output(
+                ["ip", "-4", "-o", "addr", "show", "dev", iface_name],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+            for line in output.splitlines():
+                parts = line.split()
+                if "inet" in parts:
+                    inet_idx = parts.index("inet")
+                    if inet_idx + 1 < len(parts):
+                        addr = parts[inet_idx + 1].split("/", 1)[0]
+                        ipaddress.IPv4Address(addr)
+                        addresses.append(addr)
+    except Exception:
+        return []
+
+    return sorted(set(addresses), key=lambda ip: tuple(map(int, ip.split("."))))
+
+
+def list_local_interfaces() -> List[LocalInterface]:
+    interfaces: List[LocalInterface] = []
+    for _, name in socket.if_nameindex():
+        interfaces.append(LocalInterface(name=name, ipv4_addresses=list_interface_ipv4_addresses(name)))
+    interfaces.sort(key=lambda i: i.name)
+    return interfaces
+
+
+def resolve_scan_source_ip(
+    selected_iface: str | None, interfaces: List[LocalInterface], parser: argparse.ArgumentParser
+) -> Tuple[str, str]:
+    if selected_iface:
+        for iface in interfaces:
+            if iface.name == selected_iface:
+                if not iface.ipv4_addresses:
+                    parser.error(f"Interface '{selected_iface}' has no IPv4 address")
+                return iface.name, iface.ipv4_addresses[0]
+        available = ", ".join(i.name for i in interfaces) or "none"
+        parser.error(f"Unknown interface '{selected_iface}'. Available: {available}")
+
+    local_ip = detect_local_ipv4()
+    for iface in interfaces:
+        if local_ip in iface.ipv4_addresses:
+            return iface.name, local_ip
+    return "auto", local_ip
 
 
 def is_port_open(ip: str, port: int, timeout: float) -> bool:
@@ -145,7 +214,13 @@ def scan_host(ip: str, timeout: float) -> ScanResult:
     )
 
 
-def render_markdown(network: str, local_ip: str, results: List[ScanResult]) -> str:
+def render_markdown(
+    network: str,
+    local_ip: str,
+    selected_interface: str,
+    interfaces: List[LocalInterface],
+    results: List[ScanResult],
+) -> str:
     open_443 = [r for r in results if r.port_open]
     tls_ok = [r for r in open_443 if r.tls_ok]
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -154,19 +229,40 @@ def render_markdown(network: str, local_ip: str, results: List[ScanResult]) -> s
         "# SNI scan report",
         "",
         f"- Generated: {now}",
+        f"- Selected interface: `{selected_interface}`",
         f"- Local IP: `{local_ip}`",
         f"- Network scanned: `{network}`",
         f"- Hosts checked: `{len(results)}`",
         f"- 443 open: `{len(open_443)}`",
         f"- TLS parsed: `{len(tls_ok)}`",
         "",
-        "## Hosts with 443/tcp open",
+        "## Local interfaces",
         "",
-        f"Server IP: `{local_ip}`",
-        "",
-        "| IP | TLS | CN | SAN (possible SNI) | DNS -> IP match | Note |",
-        "|---|---|---|---|---|---|",
+        "| Interface | IPv4 addresses |",
+        "|---|---|",
     ]
+
+    for iface in interfaces:
+        iface_name = iface.name
+        if iface.name == selected_interface:
+            iface_name = f"{iface_name} (selected)"
+        addr_text = ", ".join(f"`{ip}`" for ip in iface.ipv4_addresses) if iface.ipv4_addresses else "-"
+        lines.append(f"| `{iface_name}` | {addr_text} |")
+
+    if not interfaces:
+        lines.append("| - | no interfaces found |")
+
+    lines.extend(
+        [
+            "",
+            "## Hosts with 443/tcp open",
+            "",
+            f"Server IP: `{local_ip}`",
+            "",
+            "| IP | TLS | CN | SAN (possible SNI) | DNS -> IP match | Note |",
+            "|---|---|---|---|---|---|",
+        ]
+    )
 
     for r in open_443:
         tls = "yes" if r.tls_ok else "no"
@@ -187,6 +283,7 @@ def render_markdown(network: str, local_ip: str, results: List[ScanResult]) -> s
             "- `SAN/CN` from certificate are practical candidates for SNI values.",
             "- `DNS -> IP match`: `yes` if all resolvable cert names point to scanned IP, `partial` if some, `no` if none.",
             "- By default script checks local `/24`, can be changed with `--mask`.",
+            "- Use `--interface` to scan from a specific local interface.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -223,11 +320,18 @@ def main() -> None:
         default=24,
         help="Network mask bits for local subnet scan (default: 24)",
     )
+    parser.add_argument(
+        "-i",
+        "--interface",
+        default=None,
+        help="Local interface name (example: en0). If omitted, auto-detect from default route.",
+    )
     args = parser.parse_args()
     if not (0 <= args.mask <= 32):
         parser.error("--mask must be in range 0..32")
 
-    local_ip = detect_local_ipv4()
+    interfaces = list_local_interfaces()
+    selected_interface, local_ip = resolve_scan_source_ip(args.interface, interfaces, parser)
     net = ipaddress.ip_network(f"{local_ip}/{args.mask}", strict=False)
     hosts = [str(h) for h in net.hosts() if str(h) != local_ip]
 
@@ -238,13 +342,15 @@ def main() -> None:
             results.append(fut.result())
 
     results.sort(key=lambda r: tuple(map(int, r.ip.split("."))))
-    md = render_markdown(str(net), local_ip, results)
+    md = render_markdown(str(net), local_ip, selected_interface, interfaces, results)
 
     with open(args.output, "w", encoding="utf-8") as f:
         f.write(md)
 
     print(f"[OK] Report saved to: {args.output}")
-    print(f"[INFO] Local IP: {local_ip}, scanned: {net}, checked hosts: {len(hosts)}")
+    print(
+        f"[INFO] Interface: {selected_interface}, Local IP: {local_ip}, scanned: {net}, checked hosts: {len(hosts)}"
+    )
 
 
 if __name__ == "__main__":
