@@ -151,11 +151,11 @@ def fetch_cert_sni_candidates(ip: str, timeout: float) -> Tuple[bool, str, List[
     return True, cn, san, ""
 
 
-def resolve_ipv4_set(domain: str) -> set[str]:
+def resolve_ipv4_set(domain: str) -> set[str] | None:
     try:
         infos = socket.getaddrinfo(domain, None, socket.AF_INET, socket.SOCK_STREAM)
     except Exception:
-        return set()
+        return None
     return {info[4][0] for info in infos}
 
 
@@ -164,7 +164,7 @@ def calc_dns_match_status(ip: str, common_name: str, san_names: List[str]) -> st
     if common_name:
         domains.append(common_name)
     domains.extend(san_names)
-    domains = sorted(set(domains))
+    domains = sorted({d.strip().rstrip(".").lower() for d in domains if d.strip()})
 
     if not domains:
         return "-"
@@ -175,8 +175,11 @@ def calc_dns_match_status(ip: str, common_name: str, san_names: List[str]) -> st
         # Wildcard names are not directly resolvable as-is.
         if "*" in domain:
             continue
-        checked += 1
         resolved_ips = resolve_ipv4_set(domain)
+        # Count only resolvable names in DNS -> IP match statistics.
+        if not resolved_ips:
+            continue
+        checked += 1
         if ip in resolved_ips:
             matched += 1
 
