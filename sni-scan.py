@@ -224,6 +224,18 @@ def render_markdown(
     interfaces: List[LocalInterface],
     results: List[ScanResult],
 ) -> str:
+    def format_domain_cell_value(domain: str, as_link: bool) -> str:
+        if not domain:
+            return "-"
+        if as_link and not domain.startswith("*"):
+            return f"[{domain}](https://{domain})"
+        return f"`{domain}`"
+
+    def format_san_cell_value(domains: List[str], as_link: bool) -> str:
+        if not domains:
+            return "-"
+        return ", ".join(format_domain_cell_value(domain, as_link) for domain in domains)
+
     open_443 = [r for r in results if r.port_open]
     tls_ok = [r for r in open_443 if r.tls_ok]
     dns_match_yes = [r for r in open_443 if r.dns_match_status == "yes"]
@@ -293,11 +305,11 @@ def render_markdown(
 
     for r in dns_match_yes:
         tls = "yes" if r.tls_ok else "no"
-        cn = r.common_name or "-"
-        san = ", ".join(r.san_names) if r.san_names else "-"
+        cn = format_domain_cell_value(r.common_name, as_link=True)
+        san = format_san_cell_value(r.san_names, as_link=True)
         dns_match = r.dns_match_status
         note = r.note or "-"
-        lines.append(f"| `{r.ip}` | {tls} | `{cn}` | `{san}` | {dns_match} | {note} |")
+        lines.append(f"| `{r.ip}` | {tls} | {cn} | {san} | {dns_match} | {note} |")
 
     if not dns_match_yes:
         lines.append("| - | - | - | - | - | no hosts with DNS -> IP match = yes |")
