@@ -285,7 +285,7 @@ def render_markdown(
         cn = r.common_name or "-"
         san = ", ".join(r.san_names) if r.san_names else "-"
         dns_match = r.dns_match_status
-        note = r.note or "-"
+        note = (r.note or "-") if r.tls_ok else "-"
         lines.append(f"| `{r.ip}` | {tls} | `{cn}` | `{san}` | {dns_match} | {note} |")
 
     if not open_443:
@@ -308,7 +308,7 @@ def render_markdown(
         cn = format_domain_cell_value(r.common_name, as_link=True)
         san = format_san_cell_value(r.san_names, as_link=True)
         dns_match = r.dns_match_status
-        note = r.note or "-"
+        note = (r.note or "-") if r.tls_ok else "-"
         lines.append(f"| `{r.ip}` | {tls} | {cn} | {san} | {dns_match} | {note} |")
 
     if not dns_match_yes:
