@@ -223,6 +223,7 @@ def render_markdown(
 ) -> str:
     open_443 = [r for r in results if r.port_open]
     tls_ok = [r for r in open_443 if r.tls_ok]
+    dns_match_yes = [r for r in open_443 if r.dns_match_status == "yes"]
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     lines = [
@@ -274,6 +275,29 @@ def render_markdown(
 
     if not open_443:
         lines.append("| - | - | - | - | - | no hosts with 443 open |")
+
+    lines.extend(
+        [
+            "",
+            "## Hosts with DNS -> IP match = yes",
+            "",
+            f"Server IP: `{local_ip}`",
+            "",
+            "| IP | TLS | CN | SAN (possible SNI) | DNS -> IP match | Note |",
+            "|---|---|---|---|---|---|",
+        ]
+    )
+
+    for r in dns_match_yes:
+        tls = "yes" if r.tls_ok else "no"
+        cn = r.common_name or "-"
+        san = ", ".join(r.san_names) if r.san_names else "-"
+        dns_match = r.dns_match_status
+        note = r.note or "-"
+        lines.append(f"| `{r.ip}` | {tls} | `{cn}` | `{san}` | {dns_match} | {note} |")
+
+    if not dns_match_yes:
+        lines.append("| - | - | - | - | - | no hosts with DNS -> IP match = yes |")
 
     lines.extend(
         [
